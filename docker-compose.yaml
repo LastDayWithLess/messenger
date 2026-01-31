@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:latest
+    container_name: postgres_container
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    restart: unless-stopped
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+
+  migrations:
+    build:
+      context: .
+      dockerfile: Dockerfile.migration
+    container_name: goose_migrations
+    volumes:
+      - ./migrations:/migrations
+    depends_on:
+      postgres: 
+        condition: service_healthy
+    environment:
+      DB_HOST: ${POSTGRES_HOST}
+      DB_PORT: ${POSTGRES_PORT}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB}
+      DB_SSLMODE: ${SSLMode}
+    command: >
+      sh -c "
+        PGPASSWORD=${POSTGRES_PASSWORD} psql -h postgres -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c 'SELECT 1' &&
+        echo 'Running migrations...' &&
+        cd /migrations &&
+        goose postgres 'host=${POSTGRES_HOST} port=${POSTGRES_PORT} user=${POSTGRES_USER} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_DB} sslmode=${SSLMode}' up
+      "
+    restart: "no"
+    networks:
+      - backend
+
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: messenger_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    environment:
+      DB_HOST: ${POSTGRES_HOST:-postgres}
+      DB_PORT: ${POSTGRES_PORT:-5432}
+      DB_USER: ${POSTGRES_USER:-user123}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-qwerty123}
+      DB_NAME: ${POSTGRES_DB:-messenger}
+      DB_SSLMODE: ${SSLMode:-disable}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    restart: unless-stopped
+    networks:
+      - backend
+
+
+volumes:
+  postgres_data:
+
+networks:
+  backend:
+    driver: bridge
